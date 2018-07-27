@@ -18,7 +18,7 @@ import yaml
 from lxml import etree
 import pytest
 
-from mirage.scripts import write_observationlist, yaml_generator, utils
+from mirage.scripts import write_observationlist, yaml_generator, utils, apt_inputs
 
 # to be set before running test
 # os.environ['MIRAGE_DATA'] = ''
@@ -90,6 +90,26 @@ def RunAllAPTTemplates(instrument):
             'The created observationlist.yaml file does not match the reference' +\
             'observationlist.yaml file. Either the APT parser is malfunctioning,' +\
             'or the reference yaml is out of date.'
+
+
+def test_table_length():
+    """Check that the .xml and .pointing files agree
+    """
+    # Define the paths to the NIRCam test XML and pointing files
+    pointing_file = os.path.join(TESTS_DIR, 'test_data', 'NIRCam', 'NIRCam' + 'Test.pointing')
+    xml_file = os.path.join(TESTS_DIR, 'test_data',  'NIRCam', 'NIRCam' + 'Test.xml')
+
+    # Initialize an AptInput object
+    apt = apt_inputs.AptInput()
+
+    # Read in the XML file
+    xmltab = apt.create_xml_table(xml_file)
+
+    # Read in the pointing file
+    pointing_tab = apt.get_pointing_info(pointing_file, xmltab['ProposalID'][0])
+
+    assert len(xmltab['ProposalID']) == len(pointing_tab['obs_num']),\
+        'Inconsistent table size from XML file ({}) and pointing file ({}). Something was not processed correctly in apt_inputs.'.format(len(xmltab['ProposalID']), len(pointing_tab['obs_num']))
 
 
 @pytest.mark.xfail

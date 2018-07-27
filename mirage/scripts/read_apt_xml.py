@@ -89,32 +89,17 @@ class ReadAPTXML():
         # Get just the element with the proposal information
         proposal_info = tree.find(self.apt + 'ProposalInformation')
 
-        # Title
-        try:
-            prop_title = proposal_info.find(self.apt + 'Title').text
-        except:
-            prop_title = proptitle_default
+        # Parse proposal information
+        prop_title = proposal_info.findtext(self.apt + 'Title', default=proptitle_default)
+        prop_id = proposal_info.findtext(self.apt + 'ProposalID', default=propid_default)
+        science_category = proposal_info.findtext(self.apt + 'ScientificCategory', default=scicat_default)
 
-        # Proposal ID
-        try:
-            prop_id = proposal_info.find(self.apt + 'ProposalID').text
-        except:
-            prop_id = propid_default
-
-        # Proposal Category
         try:
             prop_category = proposal_info.find(self.apt + 'ProposalCategory')[0]
             prop_category = etree.QName(prop_category).localname
         except:
             prop_category = propcat_default
 
-        # Science Category
-        try:
-            science_category = proposal_info.find(self.apt + 'ScientificCategory').text
-        except:
-            science_category = scicat_default
-
-        # Principal Investigator Name
         try:
             pi_firstname = proposal_info.find('.//' + self.apt + 'FirstName').text
             pi_lastname = proposal_info.find('.//' + self.apt + 'LastName').text
@@ -183,8 +168,12 @@ class ReadAPTXML():
             prop_params = [pi_name, prop_id, prop_title, prop_category,
                            science_category, coordparallel, i_obs]
 
-            proposal_parameter_dictionary = {'PI_Name': pi_name, 'ProposalID': prop_id, 'Title': prop_title, 'Proposal_category': prop_category, 'Science_category': science_category, 'CoordinatedParallel': coordparallel, 'ObservationID': i_obs}
-
+            proposal_parameter_dictionary = {
+                'PI_Name': pi_name, 'ProposalID': prop_id, 'Title': prop_title,
+                'Proposal_category': prop_category,
+                'Science_category': science_category,
+                'CoordinatedParallel': coordparallel, 'ObservationID': i_obs + 1
+            }
 
             # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
             # If template is NircamImaging or NircamEngineeringImaging

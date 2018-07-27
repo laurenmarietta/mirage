@@ -88,28 +88,10 @@ class AptInput:
 
         main_dir = os.path.split(self.input_xml)[0]
 
-        # Read in xml file
-        readxml_obj = read_apt_xml.ReadAPTXML()
-        tab = readxml_obj.read_xml(self.input_xml)
+        # Read in the XML file
+        xmltab = self.create_xml_table(self.input_xml)
 
-        # If the number of dithers is set to '3TIGHT'
-        # (currently only used in NIRCam)
-        # remove 'TIGHT' from the entries and leave
-        # only the number behind
-        tight = [True if 'TIGHT' in str(val) else False for val in tab['PrimaryDithers']]
-        if np.any(tight):
-            tab = self.tight_dithers(tab)
-
-        # Expand the dictionary for multiple dithers. Expand such that there
-        # is one entry in each list for each exposure, rather than one entry
-        # for each set of dithers
-        if np.all(np.array(tab['PrimaryDithers']).astype(int) == 1):
-            # skip step if no dithers are included
-            xmltab = tab
-        else:
-            xmltab = self.expand_for_dithers(tab)
-
-        # Read in the pointing file and produce dictionary
+        # Read in the pointing file
         pointing_tab = self.get_pointing_info(self.pointing_file, xmltab['ProposalID'][0])
 
         # Check that the .xml and .pointing files agree
@@ -119,7 +101,7 @@ class AptInput:
         # Combine the dictionaries
         obstab = self.combine_dicts(xmltab, pointing_tab)
 
-        # Add epoch and catalog information
+        # Add epoch and catalog information from observationlist.yaml
         obstab = self.add_observation_info(obstab)
 
         # Expand for detectors. Create one entry in each list for each
@@ -144,6 +126,41 @@ class AptInput:
             self.output_csv = os.path.join(indir, 'Observation_table_for_' + infile + '.csv')
         ascii.write(Table(self.exposure_tab), self.output_csv, format='csv', overwrite=True)
         print('Final csv exposure list written to {}'.format(self.output_csv))
+
+    def create_xml_table(self, xml_file):
+        """Open an XML file and expand it for dithers.
+
+        Arguments
+        ---------
+        xml_file : str
+            Path to input .xml file
+
+        Returns
+        -------
+        xmltab:
+            Dictionary with observation parameters extracted from XML file
+        """
+        # Read in XML file
+        readxml_obj = read_apt_xml.ReadAPTXML()
+        xmltab = readxml_obj.read_xml(xml_file)
+
+        # If the number of dithers is set to '3TIGHT' (currently only
+        # used in NIRCam) remove 'TIGHT' from the entries and leave
+        # only the number behind
+        tight = [True if 'TIGHT' in str(val) else False for val in xmltab['PrimaryDithers']]
+        if np.any(tight):
+            xmltab = self.tight_dithers(xmltab)
+
+        # Expand the dictionary for multiple dithers. Expand such that there
+        # is one entry in each list for each exposure, rather than one entry
+        # for each set of dithers
+        if np.all(np.array(xmltab['PrimaryDithers']).astype(int) == 1):
+            # skip step if no dithers are included
+            xmltab = xmltab
+        else:
+            xmltab = self.expand_for_dithers(xmltab)
+
+        return xmltab
 
     def extract_value(self, line):
         """Extract text from xml line"""
@@ -500,7 +517,6 @@ class AptInput:
             pointing_dec = np.float(self.exposure_tab['dec'][i])
             pointing_v2 = np.float(self.exposure_tab['v2'][i])
             pointing_v3 = np.float(self.exposure_tab['v3'][i])
-
             if 'pav3' in self.exposure_tab.keys():
                 pav3 = np.float(self.exposure_tab['pav3'][i])
             else:
@@ -604,135 +620,80 @@ class AptInput:
             onums.append(observation)
         onames = np.array(onames)
 
-        OBSERVATION_LIST_FIELDS = 'Name Date PAV3 Filter PointSourceCatalog GalaxyCatalog ExtendedCatalog ExtendedScale ExtendedCenter MovingTargetList MovingTargetSersic MovingTargetExtended MovingTargetConvolveExtended MovingTargetToTrack BackgroundRate'.split()
+        NIRISS_OBSERVATION_LIST_FIELDS = 'Name Date PAV3 Filter PointSourceCatalog GalaxyCatalog ExtendedCatalog ExtendedScale ExtendedCenter MovingTargetList MovingTargetSersic MovingTargetExtended MovingTargetConvolveExtended MovingTargetToTrack BackgroundRate'.split()
+        NIRCAM_OBSERVATION_LIST_FIELDS = 'Date PAV3 LW SW'.split()
+        NIRCAM_FILTER_CONFIG_FIELDS = 'PointSourceCatalog GalaxyCatalog ExtendedCatalog ExtendedScale ExtendedCenter MovingTargetList MovingTargetSersic MovingTargetExtended MovingTargetConvolveExtended MovingTargetToTrack BackgroundRate'.split()
+        NIRCAM_FIELD_IS_PATH = [True, True, True, False, False, True,
+                                True, True, False, True, False]
 
+        # Parse NIRCam observationlist.yaml
         if np.unique(intab['Instrument'])[0].lower() == 'nircam':
+            # Add empty entries for all keys in observation list
+            for key in NIRCAM_OBSERVATION_LIST_FIELDS:
+                if key in ['LW', 'SW']:
+                    for filter_key in NIRCAM_FILTER_CONFIG_FIELDS:
+                        filter_key = '{}_{}'.format(key, filter_key)
+                        intab[filter_key] = []
+                else:
+                    intab[key] = []
 
-            obs_start = []
-            obs_pav3 = []
-            obs_sw_ptsrc = []
-            obs_sw_galcat = []
-            obs_sw_ext = []
-            obs_sw_extscl = []
-            obs_sw_extcent = []
-            obs_sw_movptsrc = []
-            obs_sw_movgal = []
-            obs_sw_movext = []
-            obs_sw_movconv = []
-            obs_sw_solarsys = []
-            obs_sw_bkgd = []
-            obs_lw_ptsrc = []
-            obs_lw_galcat = []
-            obs_lw_ext = []
-            obs_lw_extscl = []
-            obs_lw_extcent = []
-            obs_lw_movptsrc = []
-            obs_lw_movgal = []
-            obs_lw_movext = []
-            obs_lw_movconv = []
-            obs_lw_solarsys = []
-            obs_lw_bkgd = []
+            # Initialize lists for filters
+            sw_filt = []
+            lw_filt = []
 
-            # This will allow the filter values
-            # in the observation table to override
-            # what comes from APT. This is useful for
-            # WFSS observations, where you want to create
-            # 'direct images' in various filters to hand
-            # to the disperser software in order to create
-            # simulated dispersed data. In that case, you
-            # would need to create 'direct images' using
-            # several filters inside the filter listed in APT
-            # in order to get broadband colors to disperse.
-            # If filter names are present in the observation
-            # yaml file, then they will be used. If not, the
-            # filters from APT will be kept
-            obs_sw_filt = []
-            obs_lw_filt = []
-
+            # Match observation from observation table yaml file with observatoins
+            # from  APT XML/pointing
             for exp, obs in zip(intab['exposure'], intab['obs_label']):
                 match = np.where(obs == onames)[0]
                 if len(match) == 0:
                     raise ValueError("No valid epoch line found for observation {} in observation table ({}).".format(obs, onames))
 
-                # Match observation from observation table yaml file with observatoins
-                # from  APT XML/pointing; extract the date and PAV3
+                # Locate the matching observation in the observation list
                 obslist = self.obstab[onums[match[0]]]
-                obs_start.append(obslist['Date'].strftime('%Y-%m-%d'))
-                obs_pav3.append(obslist['PAV3'])
 
-                # Then, match up with the filter configuration using the exposure
-                # number
+                # Append the date and PAV3
+                date = obslist['Date'].strftime('%Y-%m-%d')
+                PAV3 = str(obslist['PAV3'])
+                intab['Date'].append(date)
+                intab['PAV3'].append(PAV3)
+
+                # Determine filter configuration number
                 exposure = int(exp[-2:])
                 filter_config = 'FilterConfig{}'.format(exposure)
-                obslist = obslist[filter_config]
-                obs_sw_ptsrc.append(self.full_path(obslist['SW']['PointSourceCatalog']))
-                obs_sw_galcat.append(self.full_path(obslist['SW']['GalaxyCatalog']))
-                obs_sw_ext.append(self.full_path(obslist['SW']['ExtendedCatalog']))
-                obs_sw_extscl.append(obslist['SW']['ExtendedScale'])
-                obs_sw_extcent.append(obslist['SW']['ExtendedCenter'])
-                obs_sw_movptsrc.append(self.full_path(obslist['SW']['MovingTargetList']))
-                obs_sw_movgal.append(self.full_path(obslist['SW']['MovingTargetSersic']))
-                obs_sw_movext.append(self.full_path(obslist['SW']['MovingTargetExtended']))
-                obs_sw_movconv.append(obslist['SW']['MovingTargetConvolveExtended'])
-                obs_sw_solarsys.append(self.full_path(obslist['SW']['MovingTargetToTrack']))
-                obs_sw_bkgd.append(obslist['SW']['BackgroundRate'])
-                obs_lw_ptsrc.append(self.full_path(obslist['LW']['PointSourceCatalog']))
-                obs_lw_galcat.append(self.full_path(obslist['LW']['GalaxyCatalog']))
-                obs_lw_ext.append(self.full_path(obslist['LW']['ExtendedCatalog']))
-                obs_lw_extscl.append(obslist['LW']['ExtendedScale'])
-                obs_lw_extcent.append(obslist['LW']['ExtendedCenter'])
-                obs_lw_movptsrc.append(self.full_path(obslist['LW']['MovingTargetList']))
-                obs_lw_movgal.append(self.full_path(obslist['LW']['MovingTargetSersic']))
-                obs_lw_movext.append(self.full_path(obslist['LW']['MovingTargetExtended']))
-                obs_lw_movconv.append(obslist['LW']['MovingTargetConvolveExtended'])
-                obs_lw_solarsys.append(self.full_path(obslist['LW']['MovingTargetToTrack']))
-                obs_lw_bkgd.append(obslist['LW']['BackgroundRate'])
 
-                # Override filters if given
+                # Get all the parameters out of observationlist.yaml for the
+                # given observation and exposure
+                for wavelength in ['LW', 'SW']:
+                    # Sort through each filter configuration parameter
+                    for filter_key, is_path in zip(NIRCAM_FILTER_CONFIG_FIELDS, NIRCAM_FIELD_IS_PATH):
+                        # Grab the value from the observation list
+                        value = str(obslist[filter_config][wavelength][filter_key])
+                        filter_key = '{}_{}'.format(wavelength, filter_key)
+
+                        # Expand env vars and ensure full path for any path parameters
+                        if is_path:
+                            value = self.full_path(value)
+
+                        # Finally, add the value to the  table
+                        intab[filter_key].append(value)
+
+                # Override filters if given in the observation list
                 try:
-                    obs_sw_filt.append(obslist['SW']['Filter'])
+                    sw_filt.append(obslist[filter_config]['SW']['Filter'])
+                    lw_filt.append(obslist[filter_config]['LW']['Filter'])
                 except:
                     pass
-                try:
-                    obs_lw_filt.append(obslist['LW']['Filter'])
-                except:
-                    pass
-
-            intab['epoch_start_date'] = obs_start
-            intab['pav3'] = obs_pav3
-            intab['sw_ptsrc'] = obs_sw_ptsrc
-            intab['sw_galcat'] = obs_sw_galcat
-            intab['sw_ext'] = obs_sw_ext
-            intab['sw_extscl'] = obs_sw_extscl
-            intab['sw_extcent'] = obs_sw_extcent
-            intab['sw_movptsrc'] = obs_sw_movptsrc
-            intab['sw_movgal'] = obs_sw_movgal
-            intab['sw_movext'] = obs_sw_movext
-            intab['sw_movconv'] = obs_sw_movconv
-            intab['sw_solarsys'] = obs_sw_solarsys
-            intab['sw_bkgd'] = obs_sw_bkgd
-            intab['lw_ptsrc'] = obs_lw_ptsrc
-            intab['lw_galcat'] = obs_lw_galcat
-            intab['lw_ext'] = obs_lw_ext
-            intab['lw_extscl'] = obs_lw_extscl
-            intab['lw_extcent'] = obs_lw_extcent
-            intab['lw_movptsrc'] = obs_lw_movptsrc
-            intab['lw_movgal'] = obs_lw_movgal
-            intab['lw_movext'] = obs_lw_movext
-            intab['lw_movconv'] = obs_lw_movconv
-            intab['lw_solarsys'] = obs_lw_solarsys
-            intab['lw_bkgd'] = obs_lw_bkgd
 
             # Here we override the filters read from APT
             # if they are given in the observation yaml file
-            if len(obs_sw_filt) > 0:
-                intab['ShortFilter'] = obs_sw_filt
-            if len(obs_lw_filt) > 0:
-                intab['LongFilter'] = obs_lw_filt
+            if len(sw_filt) > 0:
+                intab['ShortFilter'] = sw_filt
+            if len(lw_filt) > 0:
+                intab['LongFilter'] = lw_filt
 
-        # NIRISS case
+        # Parse NIRISS observationlist.yaml
         elif np.unique(intab['Instrument'])[0].lower() == 'niriss':
-            for key in OBSERVATION_LIST_FIELDS:
+            for key in NIRISS_OBSERVATION_LIST_FIELDS:
                 intab[key] = []
 
             for exp, obs in zip(intab['exposure'], intab['obs_label']):
@@ -743,7 +704,7 @@ class AptInput:
                 # Match observation from observation table yaml file with observatoins
                 # from  APT XML/pointing; extract the date and PAV3
                 obslist = self.obstab[onums[match[0]]]
-                for key in OBSERVATION_LIST_FIELDS:
+                for key in NIRISS_OBSERVATION_LIST_FIELDS:
                     if key == 'Date':
                         value = obslist[key].strftime('%Y-%m-%d')
                     else:
